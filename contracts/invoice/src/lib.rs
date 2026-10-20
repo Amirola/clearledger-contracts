@@ -84,8 +84,8 @@ impl InvoiceContract {
     ///
     /// # Panics
     /// * `InvoiceError::AlreadyInitialized` if the contract has already been initialized.
-    /// * `InvoiceError::InvalidConfiguration` if the registry address equals
-    ///   the admin or this invoice contract.
+    /// * `InvoiceError::InvalidContractAddress` if the registry address
+    ///   equals the admin or this invoice contract.
     ///
     /// # Returns
     /// * `()` - No value is returned.
@@ -180,8 +180,9 @@ impl InvoiceContract {
     ///
     /// # Panics
     /// * `InvoiceError::NotFound` if the admin is not initialized.
-    /// * `InvoiceError::InvalidConfiguration` if the pool address aliases the
-    ///   admin, this invoice contract, registry, escrow, or agent registry.
+    /// * `InvoiceError::InvalidContractAddress` if the pool address aliases
+    ///   the admin, this invoice contract, registry, escrow, or agent
+    ///   registry.
     ///
     /// # Returns
     /// * `()` - No value is returned.
@@ -267,7 +268,7 @@ impl InvoiceContract {
     ///
     /// # Panics
     /// * `InvoiceError::NotFound` if the admin is not initialized.
-    /// * `InvoiceError::InvalidConfiguration` if the agent-registry address
+    /// * `InvoiceError::InvalidContractAddress` if the agent-registry address
     ///   aliases the admin, this invoice contract, registry, pool, or escrow.
     ///
     /// # Returns
@@ -358,7 +359,7 @@ impl InvoiceContract {
     ///
     /// # Panics
     /// * `InvoiceError::NotFound` if the admin is not initialized.
-    /// * `InvoiceError::InvalidConfiguration` if the escrow address aliases
+    /// * `InvoiceError::InvalidContractAddress` if the escrow address aliases
     ///   the admin, this invoice contract, registry, pool, or agent registry.
     ///
     /// # Returns
@@ -475,6 +476,9 @@ impl InvoiceContract {
     ///
     /// # Panics
     /// * `InvoiceError::NotFound` if the admin has not been initialized.
+    /// * `InvoiceError::InvalidAsset` if `asset` aliases `admin`, this
+    ///   contract, or one of the wired registry/pool/escrow/agent-registry
+    ///   contracts. Validation runs before the allow-list is modified.
     ///
     /// # Returns
     /// * `()` - No value is returned.
@@ -498,6 +502,28 @@ impl InvoiceContract {
             .get(&DataKey::Admin)
             .unwrap_or_else(|| panic_with_error!(&env, InvoiceError::NotInitialized));
         admin.require_auth();
+
+        let mut other_wired_contracts = Vec::new(&env);
+        if let Some(pool) = env.storage().instance().get(&DataKey::PoolContract) {
+            other_wired_contracts.push_back(pool);
+        }
+        if let Some(escrow) = env.storage().instance().get(&DataKey::EscrowContract) {
+            other_wired_contracts.push_back(escrow);
+        }
+        if let Some(agent_registry) = env
+            .storage()
+            .instance()
+            .get(&DataKey::AgentRegistryContract)
+        {
+            other_wired_contracts.push_back(agent_registry);
+        }
+        Self::assert_valid_asset(
+            &env,
+            &asset,
+            &admin,
+            env.storage().instance().get(&DataKey::RegistryContract),
+            other_wired_contracts,
+        );
 
         let key = DataKey::SupportedAsset(asset.clone());
         if env.storage().persistent().has(&key) {
@@ -2712,11 +2738,35 @@ impl InvoiceContract {
             || candidate == &env.current_contract_address()
             || registry_contract.as_ref() == Some(candidate)
         {
-            panic_with_error!(env, InvoiceError::InvalidConfiguration);
+            panic_with_error!(env, InvoiceError::InvalidContractAddress);
         }
         for configured in other_wired_contracts {
             if &configured == candidate {
-                panic_with_error!(env, InvoiceError::InvalidConfiguration);
+                panic_with_error!(env, InvoiceError::InvalidContractAddress);
+            }
+        }
+    }
+
+    /// Rejects wiring a non-token address as a supported funding asset. The
+    /// same address set rejected by [`Self::assert_valid_wiring_address`] is
+    /// reserved; using `InvalidAsset` distinguishes a bad asset id from a bad
+    /// contract-role assignment.
+    fn assert_valid_asset(
+        env: &Env,
+        candidate: &Address,
+        admin: &Address,
+        registry_contract: Option<Address>,
+        other_wired_contracts: Vec<Address>,
+    ) {
+        if candidate == admin
+            || candidate == &env.current_contract_address()
+            || registry_contract.as_ref() == Some(candidate)
+        {
+            panic_with_error!(env, InvoiceError::InvalidAsset);
+        }
+        for configured in other_wired_contracts {
+            if &configured == candidate {
+                panic_with_error!(env, InvoiceError::InvalidAsset);
             }
         }
     }

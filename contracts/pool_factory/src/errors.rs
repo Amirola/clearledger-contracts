@@ -13,4 +13,11 @@ pub enum PoolFactoryError {
     /// `register_existing_pool` was given an address that does not expose a
     /// pool initialized for the requested asset.
     InvalidPool = 5,
+    /// The asset passed to a registration entry point aliases the factory
+    /// admin, the factory itself, or a wired pool/contract address instead of
+    /// a distinct token contract.
+    InvalidAsset = 8,
+    /// A registration entry point was given an invoice, escrow, or pool
+    /// address that aliases another configured role.
+    InvalidContractAddress = 9,
 }

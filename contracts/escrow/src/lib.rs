@@ -33,7 +33,10 @@ impl EscrowContract {
     ///
     /// # Panics
     /// * `AlreadyInitialized` if the contract has already been initialized.
-    /// * `InvalidConfig` if `pool_contract`, `usdc_asset`, and `admin` are not distinct addresses.
+    /// * `InvalidContractAddress` if `pool_contract` aliases `admin` or this
+    ///   escrow contract.
+    /// * `InvalidAsset` if `usdc_asset` aliases `admin`, `pool_contract`, or
+    ///   this escrow contract.
     ///
     /// # Returns
     /// * `()` - No value is returned.
@@ -47,8 +50,14 @@ impl EscrowContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, EscrowError::AlreadyInitialized);
         }
-        if pool_contract == usdc_asset || pool_contract == admin || usdc_asset == admin {
-            panic_with_error!(&env, EscrowError::InvalidConfig);
+        if pool_contract == admin || pool_contract == env.current_contract_address() {
+            panic_with_error!(&env, EscrowError::InvalidContractAddress);
+        }
+        if usdc_asset == admin
+            || usdc_asset == pool_contract
+            || usdc_asset == env.current_contract_address()
+        {
+            panic_with_error!(&env, EscrowError::InvalidAsset);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);

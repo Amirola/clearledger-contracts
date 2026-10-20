@@ -2117,6 +2117,38 @@ fn test_initialize_rejects_conflicting_registry_address() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #29)")]
+fn test_set_pool_contract_rejects_admin_with_typed_error() {
+    let (_env, client, ..) = setup();
+    let admin = client.get_admin().unwrap();
+    client.set_pool_contract(&admin);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #29)")]
+fn test_set_escrow_contract_rejects_self_with_typed_error() {
+    let (_env, client, ..) = setup();
+    let contract_address = client.address.clone();
+    client.set_escrow_contract(&contract_address);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #30)")]
+fn test_add_supported_asset_rejects_admin_with_typed_error() {
+    let (_env, client, ..) = setup();
+    let admin = client.get_admin().unwrap();
+    client.add_supported_asset(&admin);
+}
+
+#[test]
+fn test_add_supported_asset_accepts_distinct_token() {
+    let (env, client, ..) = setup();
+    let asset = Address::generate(&env);
+    client.add_supported_asset(&asset);
+    assert!(client.is_supported_asset(&asset));
+}
+
+#[test]
 fn test_set_expiry_window_emits_event() {
     let (env, client, _, _, _, _) = setup();
     let window: u64 = 86400;

@@ -37,4 +37,10 @@ pub enum InvoiceError {
     /// [`MAX_BATCH_SIZE`](crate::MAX_BATCH_SIZE), which would defeat the
     /// per-call cost bound batching exists to provide.
     BatchSizeExceeded = 28,
+    /// A wiring setter (or `initialize`) was given an address that aliases
+    /// `admin`, this contract, or another already-configured contract role.
+    InvalidContractAddress = 29,
+    /// `add_supported_asset` was given an address that aliases `admin`, this
+    /// contract, or one of the wired contract roles instead of a token.
+    InvalidAsset = 30,
 }

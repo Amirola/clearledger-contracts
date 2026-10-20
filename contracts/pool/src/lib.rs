@@ -84,10 +84,14 @@ impl PoolContract {
     ///
     /// # Panics
     /// * `AlreadyInitialized` if the contract has already been initialized.
-    /// * `InvalidConfiguration` if core contract addresses collide, if
-    ///   `treasury` equals the pool itself or any settlement contract address,
-    ///   or if `share_name`/`share_symbol` is empty (a wallet that cannot render
-    ///   the share token is treated as a misconfigured deploy).
+    /// * `InvalidContractAddress` if core contract addresses collide.
+    /// * `InvalidAsset` if `funding_asset` aliases `admin` or another wired
+    ///   contract role.
+    /// * `InvalidTreasury` if `treasury` equals the pool itself or any
+    ///   settlement contract address.
+    /// * `InvalidShareMetadata` if `share_name` or `share_symbol` is empty
+    ///   (a wallet that cannot render the share token is treated as a
+    ///   misconfigured deploy).
     /// * `EscrowAssetMismatch` if `escrow_contract`'s configured USDC asset
     ///   does not match `funding_asset`.
     ///
@@ -122,21 +126,24 @@ impl PoolContract {
         if Self::admin(&env).is_some() {
             panic_with_error!(&env, PoolError::AlreadyInitialized);
         }
-        if admin == invoice_contract
-            || admin == escrow_contract
-            || admin == funding_asset
-            || admin == registry_contract
-            || invoice_contract == escrow_contract
-            || invoice_contract == funding_asset
-            || invoice_contract == registry_contract
-            || escrow_contract == funding_asset
-            || escrow_contract == registry_contract
+        if funding_asset == admin
+            || funding_asset == invoice_contract
+            || funding_asset == escrow_contract
             || funding_asset == registry_contract
         {
-            panic_with_error!(&env, PoolError::InvalidConfiguration);
+            panic_with_error!(&env, PoolError::InvalidAsset);
+        }
+        if admin == invoice_contract
+            || admin == escrow_contract
+            || admin == registry_contract
+            || invoice_contract == escrow_contract
+            || invoice_contract == registry_contract
+            || escrow_contract == registry_contract
+        {
+            panic_with_error!(&env, PoolError::InvalidContractAddress);
         }
         if share_name.is_empty() || share_symbol.is_empty() {
-            panic_with_error!(&env, PoolError::InvalidConfiguration);
+            panic_with_error!(&env, PoolError::InvalidShareMetadata);
         }
         Self::assert_valid_treasury(
             &env,
@@ -1902,7 +1909,8 @@ impl PoolContract {
     /// Requires authorization from `admin` (via `admin.require_auth()`).
     ///
     /// # Panics
-    /// * `InvalidAmount` if `new_cap_bps` exceeds `10_000`.
+    /// * `InvalidUtilizationCap` if `new_cap_bps` exceeds `10_000` bps
+    ///   (100%). The cap is validated before any storage write.
     ///
     /// # Returns
     /// * `bool` - `true` when the cap is updated.
@@ -1915,7 +1923,7 @@ impl PoolContract {
         require_not_paused(&env);
         admin.require_auth();
         if new_cap_bps > 10000 {
-            panic_with_error!(&env, PoolError::InvalidAmount);
+            panic_with_error!(&env, PoolError::InvalidUtilizationCap);
         }
         let old_cap_bps = Self::totals(&env).max_utilization_bps;
         env.storage()
@@ -1942,8 +1950,9 @@ impl PoolContract {
     /// # Panics
     /// * `NotInitialized` if the pool is not initialized.
     /// * `FeeTooHigh` if `fee_bps` exceeds `MAX_PROTOCOL_FEE_BPS` (2000 bps).
-    /// * `InvalidConfiguration` if `treasury` is the pool, invoice, escrow,
-    ///   registry, or funding-asset address.
+    /// * `InvalidTreasury` if `treasury` is the pool, invoice, escrow,
+    ///   registry, or funding-asset address. Validation runs before either
+    ///   stored value is changed.
     ///
     /// # Returns
     /// * `bool` - `true` when the fee is updated.
@@ -2038,7 +2047,7 @@ impl PoolContract {
             || treasury == funding_asset
             || treasury == registry_contract
         {
-            panic_with_error!(env, PoolError::InvalidConfiguration);
+            panic_with_error!(env, PoolError::InvalidTreasury);
         }
     }
 

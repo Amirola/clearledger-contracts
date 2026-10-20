@@ -19,4 +19,10 @@ pub enum EscrowError {
     InvalidRecipient = 7,
     /// Returned when attempting to initialize with colliding addresses (e.g., pool_contract == usdc_asset).
     InvalidConfig = 8,
+    /// Returned when `initialize` is given a pool/admin address that aliases
+    /// another configured contract role.
+    InvalidContractAddress = 9,
+    /// Returned when `initialize` is given a `usdc_asset` that aliases the
+    /// admin, pool, or this escrow contract instead of a distinct token.
+    InvalidAsset = 10,
 }

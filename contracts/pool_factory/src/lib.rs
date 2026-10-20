@@ -111,9 +111,14 @@ impl PoolFactoryContract {
     ///   asset once only; there is no replace semantics.
     /// * `InvoiceNotInitialized` if `invoice_contract` does not report a
     ///   registry contract.
-    /// * `PoolError::InvalidConfiguration` if the pool rejects the resulting
-    ///   address set (for example if the factory admin is also one of the
-    ///   invoice/escrow/asset/registry addresses).
+    /// * `InvalidAsset` if `asset` aliases the factory admin, the factory
+    ///   itself, or another wired address.
+    /// * `InvalidContractAddress` if `invoice_contract` or `escrow_contract`
+    ///   aliases another configured role. Both checks run before deployment,
+    ///   so an invalid registration never orphans a deployed instance.
+    /// * `PoolError::InvalidContractAddress` / `PoolError::InvalidAsset` if the
+    ///   pool rejects the resulting address set (for example if the factory
+    ///   admin is also one of the invoice/escrow/registry addresses).
     /// * `PoolError::EscrowAssetMismatch` if `escrow_contract` was initialized
     ///   with a different asset than `asset`.
     ///
@@ -134,6 +139,13 @@ impl PoolFactoryContract {
         let admin = Self::admin(&env);
         admin.require_auth();
         Self::assert_unregistered(&env, &asset);
+        Self::assert_valid_registration_addresses(
+            &env,
+            &admin,
+            &asset,
+            &invoice_contract,
+            &escrow_contract,
+        );
 
         // Deploy the instance with this factory as the deploying contract. The
         // deployer address plus the salt fix the instance address, so the
@@ -176,6 +188,10 @@ impl PoolFactoryContract {
     /// # Panics
     /// * `NotInitialized` if the factory has not been initialized.
     /// * `AssetAlreadyRegistered` if the asset is already registered.
+    /// * `InvalidAsset` if `asset` aliases the factory admin, the factory
+    ///   itself, or `pool_address`.
+    /// * `InvalidContractAddress` if `pool_address` aliases the factory admin
+    ///   or the factory itself.
     /// * `InvalidPool` if `pool_address` does not expose a pool initialized
     ///   for `asset`.
     ///
@@ -190,6 +206,15 @@ impl PoolFactoryContract {
         let admin = Self::admin(&env);
         admin.require_auth();
         Self::assert_unregistered(&env, &asset);
+        if pool_address == admin || pool_address == env.current_contract_address() {
+            panic_with_error!(&env, PoolFactoryError::InvalidContractAddress);
+        }
+        if asset == admin
+            || asset == env.current_contract_address()
+            || asset == pool_address
+        {
+            panic_with_error!(&env, PoolFactoryError::InvalidAsset);
+        }
 
         let pool_funding_asset = env.try_invoke_contract::<Address, soroban_sdk::Error>(
             &pool_address,
@@ -311,6 +336,33 @@ impl PoolFactoryContract {
             .instance()
             .get(&DataKey::Admin)
             .unwrap_or_else(|| panic_with_error!(env, PoolFactoryError::NotInitialized))
+    }
+
+    /// Rejects registration address sets that alias a token id with a
+    /// contract/admin role, or one contract role with another. Validated
+    /// before deploy/storage so a rejected call leaves no orphaned instance.
+    fn assert_valid_registration_addresses(
+        env: &Env,
+        admin: &Address,
+        asset: &Address,
+        invoice_contract: &Address,
+        escrow_contract: &Address,
+    ) {
+        if asset == admin
+            || asset == &env.current_contract_address()
+            || asset == invoice_contract
+            || asset == escrow_contract
+        {
+            panic_with_error!(env, PoolFactoryError::InvalidAsset);
+        }
+        if invoice_contract == admin
+            || invoice_contract == &env.current_contract_address()
+            || escrow_contract == admin
+            || escrow_contract == &env.current_contract_address()
+            || invoice_contract == escrow_contract
+        {
+            panic_with_error!(env, PoolFactoryError::InvalidContractAddress);
+        }
     }
 
     /// Panics if `asset` already has a pool registered.

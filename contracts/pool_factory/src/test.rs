@@ -391,6 +391,38 @@ fn test_register_asset_duplicate_panics() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_register_asset_rejects_admin_as_asset_with_typed_error() {
+    let te = setup();
+    te.factory.register_asset(
+        &te.admin,
+        &te.pool_wasm_hash,
+        &te.invoice_id,
+        &te.escrow_id,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_register_asset_rejects_colliding_contracts_with_typed_error() {
+    let te = setup();
+    te.factory.register_asset(
+        &te.asset,
+        &te.pool_wasm_hash,
+        &te.invoice_id,
+        &te.invoice_id,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_register_existing_pool_rejects_admin_as_asset_with_typed_error() {
+    let te = setup();
+    let pool_address = new_initialized_pool(&te, &te.asset);
+    te.factory.register_existing_pool(&te.admin, &pool_address);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #4)")]
 fn test_register_asset_with_uninitialized_invoice_panics() {
     let te = setup();

@@ -1327,6 +1327,26 @@ fn test_registry_transfer_ownership_requires_both_auths() {
     client.transfer_ownership(&new_admin);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_transfer_ownership_rejects_contract_self_with_typed_error() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let contract_address = client.address.clone();
+    client.transfer_ownership(&contract_address);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_transfer_admin_rejects_contract_self_with_typed_error() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let contract_address = client.address.clone();
+    client.transfer_admin(&contract_address);
+}
+
 // ============== PROPERTY-BASED INVARIANT TESTS ==============
 
 fn build_metadata(

@@ -1515,7 +1515,7 @@ fn test_fund_invoice_is_permissionless() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "Error(Contract, #27)")]
 fn test_set_max_utilization_above_10000_panics() {
     let te = setup();
     te.pool.set_max_utilization(&te.admin, &10001);
@@ -3116,8 +3116,9 @@ fn test_initialize_accepts_distinct_addresses() {
 }
 
 // Every pairwise collision among (admin, invoice_contract, escrow_contract,
-// usdc_asset, registry_contract) must be rejected with InvalidConfiguration
-// (#15) so the handle_default gate can never collide with the admin path.
+// usdc_asset, registry_contract) must be rejected with the typed config errors
+// (#29 contract-role collisions, #30 funding-asset collisions) so the
+// handle_default gate can never collide with the admin path.
 #[test]
 fn test_initialize_rejects_each_pairwise_address_collision() {
     let env = Env::default();
@@ -3203,6 +3204,55 @@ fn test_initialize_rejects_treasury_aliases() {
             "treasury alias for role {role} was accepted"
         );
     }
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #30)")]
+fn test_initialize_rejects_funding_asset_alias_with_typed_error() {
+    let te = setup();
+    let pool_id = te.env.register_contract(None, PoolContract);
+    let pool = PoolContractClient::new(&te.env, &pool_id);
+    // funding_asset aliases admin: InvalidAsset (#30), never a storage write.
+    pool.initialize(
+        &te.admin,
+        &te.invoice.address,
+        &te.escrow_id,
+        &te.admin,
+        &te.registry.address,
+        &te.admin,
+        &DEFAULT_MIN_INITIAL_DEPOSIT,
+        &String::from_str(&te.env, TEST_SHARE_NAME),
+        &String::from_str(&te.env, TEST_SHARE_SYMBOL),
+        &DEFAULT_SHARE_DECIMALS,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #29)")]
+fn test_initialize_rejects_contract_address_alias_with_typed_error() {
+    let te = setup();
+    let pool_id = te.env.register_contract(None, PoolContract);
+    let pool = PoolContractClient::new(&te.env, &pool_id);
+    // invoice_contract aliases escrow_contract: InvalidContractAddress (#29).
+    pool.initialize(
+        &te.admin,
+        &te.escrow_id,
+        &te.escrow_id,
+        &te.usdc_id,
+        &te.registry.address,
+        &te.admin,
+        &DEFAULT_MIN_INITIAL_DEPOSIT,
+        &String::from_str(&te.env, TEST_SHARE_NAME),
+        &String::from_str(&te.env, TEST_SHARE_SYMBOL),
+        &DEFAULT_SHARE_DECIMALS,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #28)")]
+fn test_set_protocol_fee_rejects_treasury_alias_with_typed_error() {
+    let te = setup();
+    te.pool.set_protocol_fee(&500, &te.pool_id);
 }
 
 //  ISSUE #265: PREVENT ALREADYFUNDED SILENT SHADOWING
@@ -5260,7 +5310,7 @@ fn test_share_metadata_is_scoped_to_the_pool_instance() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #31)")]
 fn test_initialize_rejects_empty_share_symbol() {
     let env = Env::default();
     env.mock_all_auths();

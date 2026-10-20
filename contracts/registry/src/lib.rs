@@ -744,9 +744,13 @@ impl RegistryContract {
     ///
     /// # Panics
     /// * `RegistryError::NotInitialized` if the contract has not been initialized.
+    /// * `RegistryError::InvalidAddress` if `new_admin` is this registry
+    ///   contract, which cannot be a valid external controller. Validation
+    ///   runs before the admin slot is written.
     pub fn transfer_ownership(env: Env, new_admin: Address) {
         require_not_paused(&env);
         let admin = Self::require_admin(&env);
+        Self::assert_valid_new_admin(&env, &new_admin);
         admin.require_auth();
         new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
@@ -776,6 +780,8 @@ impl RegistryContract {
     /// # Panics
     /// * `RegistryError::NotInitialized` if the contract has not been
     ///   initialized.
+    /// * `RegistryError::InvalidAddress` if `new_admin` is this registry
+    ///   contract. Validation runs before the admin slot is written.
     ///
     /// # Returns
     /// * `()` - No value is returned.
@@ -787,6 +793,7 @@ impl RegistryContract {
     pub fn transfer_admin(env: Env, new_admin: Address) {
         require_not_paused(&env);
         let admin = Self::require_admin(&env);
+        Self::assert_valid_new_admin(&env, &new_admin);
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         events::admin_transferred(&env, &admin, &new_admin);
@@ -889,6 +896,13 @@ impl RegistryContract {
 }
 
 impl RegistryContract {
+    /// Rejects an admin transfer to the contract's own address.
+    fn assert_valid_new_admin(env: &Env, new_admin: &Address) {
+        if new_admin == &env.current_contract_address() {
+            panic_with_error!(env, RegistryError::InvalidAddress);
+        }
+    }
+
     fn require_admin(env: &Env) -> Address {
         env.storage()
             .instance()
