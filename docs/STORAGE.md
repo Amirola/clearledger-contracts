@@ -367,7 +367,11 @@ ledger's event stream via `funds_locked`, `released_to_issuer`,
 
 #### Lifecycle
 
-1. `lock()` creates an `EscrowRecord` and transfers USDC from pool → escrow.
+1. `lock()` validates that `amount` is in `1..=i128::MAX` and that no
+   `Locked` record already exists for the invoice **before** transferring
+   USDC. Invalid amounts fail with `InvalidAmount`; a duplicate invoice fails
+   with `AlreadyLocked` and leaves the original `amount`/`issuer` unchanged.
+   On success it creates an `EscrowRecord` and transfers USDC from pool → escrow.
 2. `release_to_issuer()` or `release_to_pool()` transfers USDC out and
    **removes** the `Locked` key (caller must re-lock for a new funding cycle).
    `release_to_issuer()` treats `EscrowRecord.issuer` as the source of truth:
@@ -491,6 +495,24 @@ In practice most pools will have:
 **Approximately 2 + (2 × number_of_assets).**
 
 Each registered asset requires two keys: one for its position in the list (`AssetIndex`) and one mapping its address to a pool (`PoolForAsset`).
+
+### Asset Enumeration and Pagination
+
+`AssetIndex` is append-only and ordered by registration. Both registration
+paths write the asset's pool mapping, append the asset at index `AssetCount`,
+and then increment `AssetCount`, so a position never moves or gets reused.
+
+Read the list with `get_assets_page(cursor, limit)`, which returns
+`AssetPage { items: Vec<Address>, next_cursor: Option<u32> }`. `limit` must be
+in `1..=50` (`MAX_ASSET_PAGE_LIMIT`), otherwise the call panics with
+`InvalidLimit` (error 10); a cursor greater than `AssetCount` panics with
+`InvalidCursor` (error 11). Start at cursor `0` and follow `next_cursor` until
+it is `None`. A cursor equal to `AssetCount` returns an empty final page.
+
+Because the index is append-only, a registration between two page reads is
+returned at the end of the walk and cannot shift or duplicate an already-read
+asset. The legacy unbounded `list_assets()` view is retained for ABI
+compatibility and uses the same order, but new integrations should page.
 
 
 ## Gas / Budget Estimates

@@ -191,16 +191,23 @@ impl EscrowContract {
     /// # Arguments
     /// * `env` - The Soroban environment.
     /// * `invoice_id` - The invoice ID being locked.
-    /// * `amount` - The amount to lock.
+    /// * `amount` - The amount to lock. Must be in the inclusive range
+    ///   `1..=i128::MAX`, since the USDC token transfer takes an `i128`.
     /// * `issuer` - The invoice issuer address authorized to receive released
     ///   funds. Recorded as the sole source of truth for `release_to_issuer`.
     ///
     /// # Auth
     /// Requires authorization from the configured pool contract.
     ///
+    /// # Ordering
+    /// Amount validation and the duplicate-lock check both run before the USDC
+    /// transfer. A rejected lock therefore moves no tokens, writes no record,
+    /// and appends no history. In particular, a duplicate lock never overwrites
+    /// the original record's `issuer` or `amount`.
+    ///
     /// # Panics
     /// * `NotInitialized` if the contract has not been initialized.
-    /// * `InvalidAmount` if the amount is zero.
+    /// * `InvalidAmount` if the amount is zero or greater than `i128::MAX`.
     /// * `AlreadyLocked` if the invoice is already locked.
     ///
     /// # Returns

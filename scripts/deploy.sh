@@ -603,6 +603,7 @@ chmod 600 "$ENV_OUT" "$JSON_OUT" "$ADDRESSES_FILE"
 if [ -f "scripts/maintainer/update-readme-addresses.sh" ]; then
   bash scripts/maintainer/update-readme-addresses.sh
 fi
+python3 scripts/check_deployment_metadata.py
 
 echo ""
 echo "==========================================="
