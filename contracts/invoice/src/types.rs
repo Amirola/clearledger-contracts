@@ -39,6 +39,10 @@ pub struct Invoice {
     pub face_value: u128,
     /// Discount applied when the invoice is funded, in basis points
     /// (1 bp = 0.01%). Determines the yield to funders.
+    ///
+    /// On early repayment the pool earns only the time-proportional share,
+    /// `floor(discount * elapsed / term)`, rounded down to the stroop; the
+    /// unearned remainder is refunded to the buyer (issue #26).
     pub discount_bps: u32,
     /// Amount that has been funded against this invoice, in USDC stroops.
     ///
@@ -162,22 +166,46 @@ pub struct Attestation {
 /// Decoded from the raw `payload: Bytes` argument via
 /// [`soroban_sdk::xdr::FromXdr`], and the *same* raw bytes are what get
 /// keccak256-hashed and checked against `signature`. The field order here
-/// therefore doubles as the wire format agents must sign over.
+/// therefore doubles as the wire format agents must sign over:
+///
+/// ```text
+/// domain_separator || invoice_id || risk_score || evidence_hash || agent_id || nonce
+/// ```
+///
+/// (as the XDR `ScVal` encoding of the struct, not a hand-rolled
+/// concatenation). The signature is a 65-byte secp256k1 recoverable
+/// signature over `keccak256(payload)`, encoded as `r || s || recovery_id`.
+///
+/// Every field is part of the signed preimage. Changing any of them
+/// invalidates the signature; in addition, `domain_separator` must equal
+/// [`InvoiceContract::get_attestation_domain_separator`] (network + contract
+/// binding), `invoice_id` must equal the submitted invoice, and `agent_id`
+/// must resolve to an active registry agent whose pubkey matches the
+/// recovered key. See `submit_attestation` for the full trust boundary.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct AttestationPayload {
-    /// Domain separator binding this signature to ClearLedger attestations
-    /// specifically, so a signature can't be replayed against an unrelated
-    /// contract or message scheme.
+    /// Effective domain separator binding this signature to this
+    /// ClearLedger attestation scheme, this Stellar network, and this exact
+    /// invoice contract deployment. Must equal
+    /// [`InvoiceContract::get_attestation_domain_separator`].
     pub domain_separator: BytesN<32>,
     /// The invoice this attestation is for. Must match the `invoice_id`
     /// argument passed to `submit_attestation`.
     pub invoice_id: BytesN<32>,
+    /// Risk score in basis points. Signed, so it cannot be altered in
+    /// flight.
     pub risk_score: u32,
+    /// Hash of the off-chain underwriting evidence. Signed, so it cannot be
+    /// substituted in flight.
     pub evidence_hash: BytesN<32>,
+    /// Identifier of the attesting agent. Must resolve to an active agent
+    /// whose registered pubkey matches the recovered signing key.
     pub agent_id: Symbol,
-    /// Caller-chosen nonce. Not separately tracked on-chain: the
-    /// one-attestation-per-invoice storage check is the replay guard.
+    /// Caller-chosen nonce, included in the signed preimage. Changing it
+    /// invalidates the signature. It is not tracked across invoices: the
+    /// one-attestation-per-invoice storage check is the on-chain replay
+    /// guard.
     pub nonce: u64,
 }
 

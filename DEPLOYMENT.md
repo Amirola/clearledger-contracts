@@ -11,6 +11,7 @@ smart contracts on Stellar.
 | Rust | 1.85.0 | `rustup toolchain install 1.85.0` |
 | wasm32v1-none target | — | `rustup target add wasm32v1-none --toolchain 1.85.0` |
 | Stellar CLI | latest | See [Stellar CLI docs](https://github.com/stellar/stellar-cli) |
+| Python | 3 | Used by deployment metadata checks (`python3`) |
 | jq | latest | Required by `scripts/maintainer/update-readme-addresses.sh`, run automatically at the end of `deploy.sh`. See [jq docs](https://jqlang.github.io/jq/download/) |
 
 The repo ships `rust-toolchain.toml` pinning channel `1.85.0` and
@@ -28,8 +29,32 @@ Copy `.env.example` to `.env` and fill in:
 |----------|-------------|
 | `DEPLOYER_ACCOUNT` | Key alias for the deployer (default: `deployer`) |
 | `USDC_ISSUER` | Stellar address of the USDC issuer on testnet |
-| `XLM_ASSET` | XLM asset contract address (or native) - EXPERIMENTAL/INCOMPLETE |
+| `XLM_ASSET` | Native XLM SAC contract address. Testnet: `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`. See [Native XLM](docs/NATIVE_XLM.md). |
 | `DEPLOY_XLM` | Set to `true` to opt in to experimental XLM contracts; defaults to the supported USDC workflow |
+
+## Native XLM via the Stellar Asset Contract
+
+Native XLM is supported through its Stellar Asset Contract (SAC), not through an
+issuer account. `XLM_ASSET` must be the network-specific SAC `C...` address, and
+the pool's `funding_asset`, the XLM escrow's asset, and the invoice allow-list
+entry must all use that same address. XLM uses 7 decimals (stroops), and the
+native SAC has no issuer or administrator.
+
+The canonical Testnet address is:
+
+```
+CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+```
+
+Do not use the `native` keyword or a `XLM:G...` asset identifier in a Soroban
+`Address` field. For address derivation, verification commands, factory
+initialization requirements, and current limitations, see
+[docs/NATIVE_XLM.md](docs/NATIVE_XLM.md).
+
+XLM deployment remains opt-in (`DEPLOY_XLM=true`) and the frontend does not yet
+expose an XLM pool. The bundled scripts deploy a dedicated XLM pool directly;
+routing an XLM pool through `pool_factory::register_asset` is supported but
+currently manual.
 
 ### Signing-Key and Log Handling
 
@@ -121,10 +146,10 @@ because each contract references others:
    └─ needs: invoice_contract, escrow_contract, USDC asset
 
 5. escrow_contract (XLM) [EXPERIMENTAL]
-   └─ needs: pool_contract, XLM asset
+   └─ needs: pool_contract, native XLM SAC address
 
 6. pool_contract (XLM) [EXPERIMENTAL]
-   └─ needs: invoice_contract, escrow_contract, XLM asset
+   └─ needs: invoice_contract, escrow_contract, native XLM SAC address
 
 7. Wire pool into invoice
    └─ invoice.set_pool_contract(pool_usdc)
@@ -322,6 +347,19 @@ You can also verify on [Stellar Expert Testnet](https://stellar.expert/explorer/
 To confirm the deployed bytecode matches your local build, compare hashes as
 described in the [WASM artifact contributor guide](docs/developer-guide/wasm-artifacts.md#compare-wasm-hashes).
 
+### Deployment Metadata Consistency
+
+`deploy.sh` validates the generated `deployments.json`, `.env.deployed`, and
+`.deployed-addresses` against each other and the README address table before it
+reports completion. CI also checks that the README markers and required address
+rows are present; locally generated files are compared whenever they exist.
+Run the same checks manually with:
+
+```bash
+python3 scripts/check_deployment_metadata.py
+python3 -m unittest scripts.test_deployment_metadata
+```
+
 ## Contract Address Lifecycle & Rotation Policy
 
 Testnet contract addresses are ephemeral and may be rotated at any time during development. When rotated, old addresses will drift silently and are no longer maintained.
@@ -381,4 +419,5 @@ To manually invalidate old deployments:
 | `DEPLOYER_ACCOUNT not set` | Copy `.env.example` to `.env` and fill in values |
 | Deploy hangs waiting for contract | Check network connection; testnet may be slow |
 | `400` from Friendbot | Account likely already funded — this is normal |
+| `contract not found` for `XLM_ASSET` | Re-derive the SAC address with `stellar contract id asset --network testnet --asset native`; use the `C...` address, never a `G...` issuer. See [docs/NATIVE_XLM.md](docs/NATIVE_XLM.md). |
 | Contract not found on verify | Wait longer after deploy; re-run `verify.sh` |

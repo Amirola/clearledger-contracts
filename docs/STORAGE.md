@@ -325,49 +325,45 @@ EscrowRecord {
 }
 ```
 
-#### History Entry
+#### History Entries
 
 | DataKey | Type | Description |
 |---------|------|-------------|
-| `History(BytesN<32>)` | `Vec<EscrowEvent>` | Bounded, chronological event log keyed by invoice ID |
+| `HistoryCount(BytesN<32>)` | `u32` | Monotonic next append index and cursor ceiling |
+| `HistoryStart(BytesN<32>)` | `u32` | First retained event index after pruning |
+| `HistoryEvent(BytesN<32>, u32)` | `EscrowEvent` | Event at its stable append index |
+| `History(BytesN<32>)` | `Vec<EscrowEvent>` | Legacy pre-pagination vector; migrated on append or compaction |
 
-```
-EscrowEvent {
-    invoice_id: BytesN<32>,
-    action:     EscrowAction,   // Locked | ReleasedToIssuer | ReleasedToPool | DefaultHandled
-    amount:     u128,
-    timestamp:  u64,
-    caller:     Option<Address>,
-}
-```
+History is stored per event so `get_history_page(invoice_id, cursor, limit)`
+hydrates only the requested slice. The append index remains stable through
+pruning; a cursor older than `HistoryStart` resumes at the first retained event.
+At most `MAX_HISTORY_EVENTS` (32) are retained automatically, and admins may
+lower that number with `compact_history`. Pruned history remains available in
+the ledger event stream for indexers. The compatibility `get_history` view
+returns all currently retained entries in one response.
 
 #### History Retention and Compaction (issue #51)
 
-Escrow history is **bounded** so a long-lived invoice cannot grow its
-persistent entry without limit:
-
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `MAX_HISTORY_EVENTS` | 32 | Hard cap enforced by every `append_history` write. The oldest event is evicted when a 33rd is appended. |
-| `MIN_HISTORY_EVENTS` | 1 | Smallest retention an admin may request from `compact_history`. |
-| `MAX_COMPACT_PER_CALL` | 32 | Maximum events one `compact_history` call removes, bounding per-call CPU/memory. |
+| `MAX_HISTORY_EVENTS` | 32 | Automatic on-chain retention ceiling per invoice |
+| `MIN_HISTORY_EVENTS` | 1 | Smallest admin-selected retention |
+| `MAX_COMPACT_PER_CALL` | 32 | Maximum entries removed by one compaction call |
 
-`compact_history(invoice_id, keep) -> u32` is **admin-authenticated** and prunes
-the oldest entries until `keep` remain, returning the number removed. It is
-admin-gated rather than permissionless because removing on-chain audit data is
-destructive to clients that have not yet synced; the stored admin is the
-accountable party. Repeated calls are safe and idempotent: once the retained
-length is `<= keep` (or no further batch can be removed) the call returns `0`.
+`compact_history(invoice_id, keep) -> u32` requires admin authorization and
+removes oldest indexed entries until `keep` remain or the per-call removal cap
+is reached. Repeated calls are safe. Original ledger events are preserved for
+indexers; see [ESCROW_HISTORY.md](./ESCROW_HISTORY.md).
 
-Retained events keep their original chronological order (oldest first). Pruned
-events are **not** silently invented or rewritten; they remain available in the
-ledger's event stream via `funds_locked`, `released_to_issuer`,
-`released_to_pool`, and `default_resolved`. See
-[ESCROW_HISTORY.md](./ESCROW_HISTORY.md) for the full client/indexer policy.
+**Approximately 2 + N persistent keys per invoice, or 3 + N after pruning** — one `Locked` record, `HistoryCount`, one `HistoryEvent` per retained event (`N`), and `HistoryStart` once pruning begins. Legacy `History` vectors are removed when migrated. History entries receive the same TTL extension policy as the lock.
 
 #### Lifecycle
 
-1. `lock()` creates an `EscrowRecord` and transfers USDC from pool → escrow.
+1. `lock()` validates that `amount` is in `1..=i128::MAX` and that no
+   `Locked` record already exists for the invoice **before** transferring
+   USDC. Invalid amounts fail with `InvalidAmount`; a duplicate invoice fails
+   with `AlreadyLocked` and leaves the original `amount`/`issuer` unchanged.
+   On success it creates an `EscrowRecord` and transfers USDC from pool → escrow.
 2. `release_to_issuer()` or `release_to_pool()` transfers USDC out and
    **removes** the `Locked` key (caller must re-lock for a new funding cycle).
    `release_to_issuer()` treats `EscrowRecord.issuer` as the source of truth:
@@ -376,12 +372,6 @@ ledger's event stream via `funds_locked`, `released_to_issuer`,
 3. `handle_default()` returns locked USDC to the pool and **removes** the key.
 4. On removal, the TTL-granted entries also expire organically.
 
-### Storage Key Count
-
-**Approximately 2 keys per funded invoice** — one `Locked` record and one
-`History` vector (which shares its TTL with the lock). The history vector is
-capped at `MAX_HISTORY_EVENTS` entries, so its size does not grow with invoice
-age or funding cycles.
 
 ---
 
@@ -491,6 +481,24 @@ In practice most pools will have:
 **Approximately 2 + (2 × number_of_assets).**
 
 Each registered asset requires two keys: one for its position in the list (`AssetIndex`) and one mapping its address to a pool (`PoolForAsset`).
+
+### Asset Enumeration and Pagination
+
+`AssetIndex` is append-only and ordered by registration. Both registration
+paths write the asset's pool mapping, append the asset at index `AssetCount`,
+and then increment `AssetCount`, so a position never moves or gets reused.
+
+Read the list with `get_assets_page(cursor, limit)`, which returns
+`AssetPage { items: Vec<Address>, next_cursor: Option<u32> }`. `limit` must be
+in `1..=50` (`MAX_ASSET_PAGE_LIMIT`), otherwise the call panics with
+`InvalidLimit` (error 10); a cursor greater than `AssetCount` panics with
+`InvalidCursor` (error 11). Start at cursor `0` and follow `next_cursor` until
+it is `None`. A cursor equal to `AssetCount` returns an empty final page.
+
+Because the index is append-only, a registration between two page reads is
+returned at the end of the walk and cannot shift or duplicate an already-read
+asset. The legacy unbounded `list_assets()` view is retained for ABI
+compatibility and uses the same order, but new integrations should page.
 
 
 ## Gas / Budget Estimates
