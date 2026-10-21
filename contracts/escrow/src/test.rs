@@ -19,7 +19,7 @@ use soroban_sdk::{
 
 use crate::{
     DataKey, EscrowAction, EscrowContract, EscrowContractClient, EscrowError, EscrowEvent,
-    EscrowRecord, MAX_HISTORY_EVENTS, MIN_HISTORY_EVENTS,
+    EscrowRecord, MAX_HISTORY_LIMIT, MAX_HISTORY_EVENTS, MIN_HISTORY_EVENTS,
 };
 
 #[contract]
@@ -233,6 +233,29 @@ fn generate_invoice_id(env: &Env, counter: u64) -> BytesN<32> {
     let bytes = (env.ledger().timestamp() + counter).to_be_bytes();
     arr[0..8].copy_from_slice(&bytes);
     BytesN::from_array(env, &arr)
+}
+
+fn walk_history(
+    env: &Env,
+    client: &EscrowContractClient<'_>,
+    invoice_id: &BytesN<32>,
+    limit: u32,
+) -> Vec<EscrowEvent> {
+    let mut cursor = 0u32;
+    let mut events = Vec::new(env);
+    loop {
+        let page = client.get_history_page(invoice_id, &cursor, &limit);
+        let mut index = 0;
+        while index < page.items.len() {
+            events.push_back(page.items.get(index).unwrap());
+            index += 1;
+        }
+        match page.next_cursor {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+    events
 }
 
 fn get_balance(env: &Env, token_id: &Address, addr: &Address) -> i128 {
@@ -471,10 +494,9 @@ fn test_get_usdc_asset_panics_when_not_initialized() {
     client.get_usdc_asset();
 }
 
-// ============================================================================
+// ==============================================================
 // Lock Tests
-// ============================================================================
-
+// =====================================================================
 #[test]
 fn test_lock_stores_record_and_transfers_usdc() {
     let (env, client, _admin, pool, issuer, usdc_id) = setup();
@@ -639,10 +661,8 @@ fn test_lock_only_callable_by_pool() {
     assert_eq!(client.get_locked(&invoice_id), amount);
 }
 
-// ============================================================================
-// Release to Issuer Tests
-// ============================================================================
-
+// =====================================================================// Release to Issuer Tests
+// =====================================================================
 #[test]
 fn test_release_to_issuer_sends_correct_amount() {
     let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
@@ -832,10 +852,8 @@ fn test_release_to_issuer_replay_does_not_move_funds() {
     assert_eq!(get_balance(&env, &usdc_id, &client.address), 0);
 }
 
-// ============================================================================
-// Release to Pool Tests
-// ============================================================================
-
+// =====================================================================// Release to Pool Tests
+// =====================================================================
 #[test]
 fn test_release_to_pool_transfers_correct_amount() {
     let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
@@ -901,10 +919,8 @@ fn test_release_to_pool_rejects_non_invoice_contract_caller() {
     client.release_to_pool(&invoice_id, &amount);
 }
 
-// ============================================================================
-// Handle Default Tests
-// ============================================================================
-
+// =====================================================================// Handle Default Tests
+// =====================================================================
 #[test]
 #[should_panic(expected = "Error(Contract, #5)")]
 fn test_release_to_pool_fails_zero_repayment() {
@@ -1237,10 +1253,8 @@ fn test_handle_default_event_includes_caller() {
     assert_eq!(last_event.caller, Some(admin));
 }
 
-// ============================================================================
-// Get Locked Tests
-// ============================================================================
-
+// =====================================================================// Get Locked Tests
+// =====================================================================
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn test_handle_default_unauthorized_caller_panics() {
@@ -1389,10 +1403,8 @@ fn test_get_locked_at_returns_zero_after_release() {
     assert_eq!(client.get_locked_at(&invoice_id), 0);
 }
 
-// ============================================================================
-// Integration Tests
-// ============================================================================
-
+// =====================================================================// Integration Tests
+// =====================================================================
 #[test]
 fn test_multiple_invoices_independent() {
     let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
@@ -1455,6 +1467,170 @@ fn test_get_history_returns_action_log() {
         issuer,
         amount,
     );
+}
+
+#[test]
+fn test_get_history_page_empty_returns_no_items() {
+    let (env, client, _admin, _pool, _issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 50);
+
+    let page = client.get_history_page(&invoice_id, &0, &10);
+
+    assert_eq!(page.items.len(), 0);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_get_history_page_first_page_and_cursor() {
+    let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 51);
+
+    for round in 0..3u128 {
+        let amount = 1_000_000_000 + round;
+        client.lock(&invoice_id, &amount, &issuer);
+        client.release_to_pool(&invoice_id, &(amount / 2));
+        client.release_to_pool(&invoice_id, &(amount - amount / 2));
+    }
+
+    let history = client.get_history(&invoice_id);
+    let page = client.get_history_page(&invoice_id, &0, &2);
+
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.items.get(0).unwrap(), history.get(0).unwrap());
+    assert_eq!(page.items.get(1).unwrap(), history.get(1).unwrap());
+    assert_eq!(page.next_cursor, Some(2));
+}
+
+#[test]
+fn test_get_history_page_multi_page_walk_has_no_gaps_or_duplicates() {
+    let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 52);
+
+    for round in 0..3u128 {
+        let amount = 1_000_000_000 + round;
+        client.lock(&invoice_id, &amount, &issuer);
+        client.release_to_pool(&invoice_id, &(amount / 2));
+        client.release_to_pool(&invoice_id, &(amount - amount / 2));
+    }
+    client.lock(&invoice_id, &999, &issuer);
+
+    let expected = client.get_history(&invoice_id);
+    let walked = walk_history(&env, &client, &invoice_id, 2);
+
+    assert_eq!(expected.len(), 10);
+    assert_eq!(walked, expected);
+    assert_eq!(walked.get(0).unwrap().action, EscrowAction::Locked);
+    assert_eq!(walked.get(9).unwrap().action, EscrowAction::Locked);
+}
+
+#[test]
+fn test_get_history_page_exact_max_limit_and_final_cursor() {
+    let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 53);
+    let amount = 1_000_000u128;
+
+    for _ in 0..(MAX_HISTORY_EVENTS / 3 + 1) {
+        client.lock(&invoice_id, &amount, &issuer);
+        client.release_to_pool(&invoice_id, &(amount / 2));
+        client.release_to_pool(&invoice_id, &(amount - amount / 2));
+    }
+
+    assert_eq!(client.get_history(&invoice_id).len(), MAX_HISTORY_EVENTS);
+
+    let exact = client.get_history_page(&invoice_id, &0, &MAX_HISTORY_LIMIT);
+    assert_eq!(exact.items.len(), MAX_HISTORY_EVENTS);
+    assert!(exact.next_cursor.is_none());
+
+    // The oldest event is evicted without shifting the absolute append cursor.
+    client.lock(&invoice_id, &amount, &issuer);
+    let retained = client.get_history(&invoice_id);
+    assert_eq!(retained.len(), MAX_HISTORY_EVENTS);
+    assert_eq!(retained.get(0).unwrap().action, EscrowAction::ReleasedToPool);
+
+    let after_prune = client.get_history_page(&invoice_id, &0, &MAX_HISTORY_LIMIT);
+    assert_eq!(after_prune.items.len(), MAX_HISTORY_EVENTS);
+    assert!(after_prune.next_cursor.is_none());
+
+    let at_end = client.get_history_page(&invoice_id, &(MAX_HISTORY_EVENTS + 2), &10);
+    assert!(at_end.items.is_empty());
+    assert!(at_end.next_cursor.is_none());
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_get_history_page_rejects_zero_limit() {
+    let (env, client, _admin, _pool, _issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 54);
+
+    client.get_history_page(&invoice_id, &0, &0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_get_history_page_rejects_limit_above_max() {
+    let (env, client, _admin, _pool, _issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 55);
+
+    client.get_history_page(&invoice_id, &0, &(MAX_HISTORY_LIMIT + 1));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_get_history_page_rejects_cursor_past_end() {
+    let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 56);
+
+    client.lock(&invoice_id, &1_000_000u128, &issuer);
+    client.get_history_page(&invoice_id, &2, &10);
+}
+
+#[test]
+fn test_get_history_page_appends_and_partial_release_between_pages() {
+    let (env, client, _admin, _pool, issuer, _usdc_id) = setup();
+    let invoice_id = generate_invoice_id(&env, 57);
+
+    client.lock(&invoice_id, &1_000u128, &issuer);
+    client.release_to_pool(&invoice_id, &100u128);
+
+    let first = client.get_history_page(&invoice_id, &0, &1);
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items.get(0).unwrap().action, EscrowAction::Locked);
+    assert_eq!(first.items.get(0).unwrap().amount, 1_000);
+    assert_eq!(first.next_cursor, Some(1));
+
+    let partial = 400u128;
+    client.release_to_pool(&invoice_id, &partial);
+    client.release_to_pool(&invoice_id, &500u128);
+    client.lock(&invoice_id, &200u128, &issuer);
+
+    let second = client.get_history_page(&invoice_id, &first.next_cursor.unwrap(), &1);
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(
+        second.items.get(0).unwrap().action,
+        EscrowAction::ReleasedToPool
+    );
+    assert_eq!(second.items.get(0).unwrap().amount, 100);
+    assert_eq!(second.next_cursor, Some(2));
+
+    let third = client.get_history_page(&invoice_id, &second.next_cursor.unwrap(), &1);
+    assert_eq!(third.items.get(0).unwrap().amount, partial);
+    assert_eq!(third.next_cursor, Some(3));
+
+    let fourth = client.get_history_page(&invoice_id, &third.next_cursor.unwrap(), &1);
+    assert_eq!(fourth.items.len(), 1);
+    assert_eq!(fourth.items.get(0).unwrap().action, EscrowAction::ReleasedToPool);
+    assert_eq!(fourth.items.get(0).unwrap().amount, 500);
+    assert_eq!(fourth.next_cursor, Some(4));
+
+    let fifth = client.get_history_page(&invoice_id, &fourth.next_cursor.unwrap(), &1);
+    assert_eq!(fifth.items.get(0).unwrap().action, EscrowAction::Locked);
+    assert_eq!(fifth.items.get(0).unwrap().amount, 200);
+    assert!(fifth.next_cursor.is_none());
+
+    let expected = client.get_history(&invoice_id);
+    let walked = walk_history(&env, &client, &invoice_id, 1);
+    assert_eq!(expected.len(), 5);
+    assert_eq!(walked, expected);
 }
 
 #[test]
@@ -1638,10 +1814,8 @@ fn test_handle_default_requires_pool_authorization() {
     client.handle_default(&invoice_id, &pool);
 }
 
-// ============================================================================
-// Pre-initialization tests — typed NotInitialized (Contract error #6)
-// ============================================================================
-
+// =====================================================================// Pre-initialization tests — typed NotInitialized (Contract error #6)
+// =====================================================================
 /// `lock` must panic with `NotInitialized` rather than the cryptic
 /// host-side `Option::unwrap()` error when called before `initialize()`.
 #[test]
@@ -1881,8 +2055,7 @@ fn prop_escrow_balance_equals_sum_of_locked_records() {
         })
         .unwrap();
 }
-// ============== ISSUE #716: EMERGENCY PAUSE / UNPAUSE ==============
-
+// ============== ISSUE #716: EMERGENCY PAUSE / UNPAUSE =======
 #[test]
 fn test_pause_blocks_state_changes_and_unpause_restores_them() {
     let (env, client, _admin, pool, issuer, usdc_id) = setup();

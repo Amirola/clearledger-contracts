@@ -187,8 +187,9 @@ deployed instance chooses its admin.
 | `list_profiles_page` | Registry | Read-only view |
 | All `get_*`, `get_by_*`, `get_counts`, `balance`, `total_supply`, `allowance`, `get_attestation` | Invoice, Pool, Escrow | Read-only |
 | `get_stats`, `get_lp_position`, `get_utilization_rate`, `get_usdc_asset` | Pool | Read-only views |
-| `get_locked`, `get_locked_at`, `get_history` | Escrow | Read-only views |
+| `get_locked`, `get_locked_at`, `get_history`, `get_history_page` | Escrow | Read-only views; retained history is bounded and paginated |
 | `get_funded_amount`, `get_expiry_window` | Invoice | Read-only views |
+| `expire_listing` | Invoice | Also callable by issuer (Pattern A) |
 | `get_pool_for_asset`, `get_aggregate_stats`, `list_assets` | Pool factory | Read-only |
 
 Read-only views remain callable while a contract is paused.

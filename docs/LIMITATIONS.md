@@ -169,16 +169,18 @@ caller mistakes that should be fixed rather than silently skipped. Callers
 reconcile the returned funded IDs against their input to see which entries a
 capacity stop skipped.
 
-### Storing the `History` Vector (resolved by #51)
+### Escrow History Growth
 
-`escrow::append_history` stores a `Vec<EscrowEvent>` under
-`DataKey::History(invoice_id)` capped at `MAX_HISTORY_EVENTS` (32) entries.
-Appends evict the oldest entry once the cap is reached, and the admin-gated
-`compact_history(invoice_id, keep)` entry point can tighten retention further
-(`1..=32`) in bounded batches of at most 32 removals per call. This keeps the
-persistent entry well below the per-entry size limit (~100 KB in practice).
-Complete historical detail remains available from the per-action escrow events
-for indexers; see [ESCROW_HISTORY.md](./ESCROW_HISTORY.md).
+Escrow events are stored as individually indexed `HistoryEvent` entries with
+`HistoryCount` and `HistoryStart` cursors. `get_history_page(invoice_id,
+cursor, limit)` hydrates at most `limit` events (maximum 50), while the
+contract retains at most `MAX_HISTORY_EVENTS` (32) events per invoice. When
+the cap is exceeded, the oldest on-chain entries are evicted without
+renumbering survivors; admin `compact_history` can reduce retention further in
+batches. The legacy `get_history` view remains available but returns all
+retained events at once. Full historical detail remains in the emitted ledger
+events for indexers. Legacy `History` vectors migrate to indexed entries on the
+next append or compaction.
 
 ## Integer Arithmetic and Rounding
 
